@@ -2,6 +2,8 @@
 
 在 **openEuler 22.03 LTS / aarch64** 上，从源码自举出 PuXian 原生工具链的可复现流程。
 
+> 👉 只想快点用？看 [QUICKSTART.md](QUICKSTART.md)（新服务器 4 步，含发布包直链）。
+
 ```
 发布包 runtime/  C源码 + aarch64 静态库
       │               │
