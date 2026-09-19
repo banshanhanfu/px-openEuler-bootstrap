@@ -1,0 +1,116 @@
+name: bootstrap-aarch64
+
+# 上游 NanzhanGroup/PuXian 发新版时，自动在 aarch64 仿真容器里
+# 自举 PuXian 工具链 → 打包「解压即用」tarball → 发 release。
+#
+# 触发：
+#   - workflow_dispatch：手动跑（可指定上游 tag，留空=取最新）
+#   - schedule：每周一 03:00 UTC 检查上游，有新版本且未发布则构建发布
+#
+# 说明：公共 runner 是 x86_64，用 docker/setup-qemu-action 做 arm64 仿真。
+# 首次验证建议手动跑一次 workflow_dispatch（留空 tag 取最新）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 上游 release tag（如 v0.2.0-m155；留空 = 自动取最新）
+        required: false
+        default: ""
+      create_release:
+        description: 构建成功后创建/更新 GitHub Release 并上传包
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: "0 3 * * 1"   # 每周一 03:00 UTC
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 QEMU（arm64 仿真）
+        uses: docker/setup-qemu-action@v3
+
+      - name: 确定上游 tag 与发布名
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.upstream_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="$(gh api repos/NanzhanGroup/PuXian/releases/latest -q .tag_name)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_name=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: 查重（定时触发且已存在同名 release 则跳过）
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="aarch64-${{ steps.decide.outputs.release_name }}"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              echo "已存在 release $RELEASE_TAG（定时触发），跳过本次构建"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "已存在 release $RELEASE_TAG（手动触发），将覆盖更新"
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: arm64 容器内自举 + 打包 + 验证
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD":/work -w /work \
+            arm64v8/ubuntu:22.04 \
+            bash ci/bootstrap-aarch64.sh "${{ steps.decide.outputs.tag }}"
+
+      - name: 上传构建产物
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: puxian-aarch64-${{ steps.decide.outputs.release_name }}
+          path: puxian-aarch64-${{ steps.decide.outputs.release_name }}.tar.gz
+          if-no-files-found: error
+
+      - name: 创建/更新 release 并上传包
+        if: steps.check.outputs.skip != 'true' && (github.event_name == 'schedule' || inputs.create_release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NAME="${{ steps.decide.outputs.release_name }}"
+          RELEASE_TAG="aarch64-$NAME"
+          TARBALL="puxian-aarch64-$NAME.tar.gz"
+          SHA="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+          NOTES="$(cat <<EON
+          ## 解压即用包（aarch64 · openEuler 22.03 LTS 验证同流程）
+          
+          上游 ${{ steps.decide.outputs.tag }} 自举产物：13 个静态零依赖 ELF + 官方发布包布局。
+          self-prove 通过（编译器重编输出与 golden 逐字节一致）。
+          
+          - SHA-256: \`$SHA\`
+          - 使用: tar xzf → export PATH → px --version / px run / px build
+          - 说明: px 入口自动注入 aarch64 原生参数（C 轨 + aarch64 静态库 + 裁剪 QUIC）；首次 px build 现编 runtime 缓存（需 gcc）
+          EON
+          )"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$TARBALL" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$TARBALL" --repo "$GITHUB_REPOSITORY" \
+              --title "PuXian aarch64 原生工具链 $NAME（解压即用）" \
+              --notes "$NOTES"
+          fi

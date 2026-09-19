@@ -5,3 +5,9 @@ out/
 
 # 本地运行痕迹
 *.log
+# CI 流水线本地运行痕迹（ci/bootstrap-aarch64.sh 在仓库根产生）
+/src/
+/dl/
+/build/
+/prefix/
+/pkg/

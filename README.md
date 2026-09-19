@@ -116,7 +116,10 @@ aarch64 没有 ngtcp2/openssl-quictls 预编译静态库（官方只随包提供
 bootstrap.sh   一键自举构建（4 阶段，见上表）
 install.sh     安装：发布包布局 + 原生二进制 → prefix（默认 ~/.local）
 px             入口 shim 模板（install.sh 会生成硬编码路径版到 $PREFIX/bin/px）
+package.sh     打包「解压即用」tarball（CI 与手工共用同一套逻辑）
 verify.sh      部署后验证（版本 / px run / px build / 运行产物）
+ci/bootstrap-aarch64.sh               CI 流水线主体（解析上游→SHA 校验→自举→打包→验证）
+.github/workflows/bootstrap-aarch64.yml   每周一自动检查上游新版本；有新版本则自举并发布 release
 out/           构建输出（gitignore）
 ```
 
