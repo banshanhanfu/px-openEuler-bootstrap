@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# ============================================================
+# px — aarch64 原生构建入口（thin wrapper）
+#
+# wrap 官方 tools/px，注入两处原生 aarch64 差异：
+#   1) PX_BUILD_ENGINE=c   —— 默认 VM 字节码轨需要官方 x86_64 预编译的
+#      pxc_vm，aarch64 无法执行；C 轨（--c 逃生舱）产物与官方对拍一致。
+#   2) build 低层 flag     —— 原生 gcc + aarch64 静态库 + 裁剪 QUIC
+#      （等价 M57-S4：--cc gcc --no-quic --mbedtls-lib lib-aarch64
+#       --sqlite-obj sqlite3-aarch64.o --zlib-lib zlib/lib-aarch64）。
+#      M71-S2 的 --target aarch64 是交叉编译语义（强制 musl 交叉编译器），
+#      不适合原生构建，故不用。
+# ============================================================
+set -u
+PX_HOME="${PX_HOME:-}"
+if [ -z "$PX_HOME" ] || [ ! -x "$PX_HOME/tools/px" ]; then
+  # 从脚本位置自动定位（安装布局：$PREFIX/bin/px → 包根 lib/puxian）
+  PX_HOME="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../lib/puxian" 2>/dev/null && pwd)"
+fi
+[ -x "$PX_HOME/tools/px" ] || { echo "错误: 找不到 PX_HOME（tools/px）" >&2; exit 1; }
+
+export PX_BUILD_ENGINE=c
+RT="$PX_HOME/runtime"
+if [ "${1:-}" = "build" ]; then
+  exec "$PX_HOME/tools/px" build --cc gcc --no-quic \
+    --mbedtls-lib "$RT/mbedtls/lib-aarch64" \
+    --sqlite-obj "$RT/third_party/sqlite3/sqlite3-aarch64.o" \
+    --zlib-lib "$RT/third_party/zlib/lib-aarch64" "${@:2}"
+fi
+exec "$PX_HOME/tools/px" "$@"
