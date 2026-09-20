@@ -5,7 +5,7 @@ name: bootstrap-aarch64
 #
 # 触发：
 #   - workflow_dispatch：手动跑（可指定上游 tag，留空=取最新）
-#   - schedule：每周一 03:00 UTC 检查上游，有新版本且未发布则构建发布
+#   - schedule：每 4 小时检查上游（0 */4 * * * UTC），有新版本且未发布则构建发布
 #
 # 说明：公共 runner 是 x86_64，用 docker/setup-qemu-action 做 arm64 仿真。
 # 首次验证建议手动跑一次 workflow_dispatch（留空 tag 取最新）。
@@ -23,7 +23,7 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron: "0 3 * * 1"   # 每周一 03:00 UTC
+    - cron: "0 */4 * * *"   # 每 4 小时 UTC 整点
 
 permissions:
   contents: write
