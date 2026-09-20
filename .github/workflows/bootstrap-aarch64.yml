@@ -1,42 +1,45 @@
 name: bootstrap-aarch64
 
-# 上游 NanzhanGroup/PuXian 发新版时，自动在 aarch64 仿真容器里
-# 自举 PuXian 工具链 → 打包「解压即用」tarball → 发 release。
+# 上游 NanzhanGroup/PuXian 发布新版本后，在原生 arm64 runner 的
+# openEuler 22.03 容器里自举打包，并发布到本仓库 release（解压即用 tarball）。
 #
-# 触发：
-#   - workflow_dispatch：手动跑（可指定上游 tag，留空=取最新）
-#   - schedule：每 4 小时检查上游（0 */4 * * * UTC），有新版本且未发布则构建发布
+# 触发方式：
+#   - workflow_dispatch：手动指定上游 tag，空 = 取最新 release
+#   - schedule：每 4 小时检查上游（cron 0 */4 * * * UTC），已有同名 release 则跳过
 #
-# 说明：公共 runner 是 x86_64，用 docker/setup-qemu-action 做 arm64 仿真。
-# 首次验证建议手动跑一次 workflow_dispatch（留空 tag 取最新）。
+# 为什么是「原生 arm64 runner + openEuler 容器」：
+#   - 自举要在编译 19 个 runtime C 文件 + 编译器自证 + 12 个工具的 CPU 密集流程；
+#     x86 runner + QEMU TCG 仿真极慢且容易失败（首次真实运行即挂，见 run 35478437660）。
+#   - 自证（self-prove）在 Ubuntu(glibc 2.35/gcc 11) 环境复现失败：
+#     pxc0 编译 compiler.px 时 R1002 索引 null（cg_module.px:236）；
+#     同一套流程在 openEuler 22.03（gcc 10）原生环境通过（VERIFY ALL PASS）。
+#   - 因此 CI 必须跑在 openEuler aarch64：arm64 runner 上 openEuler 容器原生执行，无 QEMU。
+#   - 前置：仓库需能用 arm64 hosted runner（标准镜像 ubuntu-24.04-arm，公开仓库默认可用）。
 
 on:
   workflow_dispatch:
     inputs:
       upstream_tag:
-        description: 上游 release tag（如 v0.2.0-m155；留空 = 自动取最新）
+        description: 上游 release tag（如 v0.2.0-m155）；空 = 取最新 release
         required: false
         default: ""
       create_release:
-        description: 构建成功后创建/更新 GitHub Release 并上传包
+        description: 构建完成后是否创建/更新 GitHub Release
         required: false
         type: boolean
         default: true
   schedule:
-    - cron: "0 */4 * * *"   # 每 4 小时 UTC 整点
+    - cron: "0 */4 * * *"    # 每 4 小时 UTC 检查
 
 permissions:
   contents: write
 
 jobs:
   bootstrap:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm     # 原生 arm64 runner（含 docker，无 QEMU）
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
-
-      - name: 安装 QEMU（arm64 仿真）
-        uses: docker/setup-qemu-action@v3
 
       - name: 确定上游 tag 与发布名
         id: decide
@@ -60,22 +63,23 @@ jobs:
           RELEASE_TAG="aarch64-${{ steps.decide.outputs.release_name }}"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             if [ "${{ github.event_name }}" = "schedule" ]; then
-              echo "已存在 release $RELEASE_TAG（定时触发），跳过本次构建"
+              echo "已在 release $RELEASE_TAG（定时触发），跳过本次构建"
               echo "skip=true" >> "$GITHUB_OUTPUT"
             else
-              echo "已存在 release $RELEASE_TAG（手动触发），将覆盖更新"
+              echo "已在 release $RELEASE_TAG（手动触发），将更新到最新"
               echo "skip=false" >> "$GITHUB_OUTPUT"
             fi
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: arm64 容器内自举 + 打包 + 验证
+      - name: openEuler(aarch64) 容器内自举 + 打包 + 验证
         if: steps.check.outputs.skip != 'true'
         run: |
-          docker run --rm --platform linux/arm64 \
+          # arm64 runner 上运行 arm64 容器 = 原生执行，不需要 setup-qemu
+          docker run --rm \
             -v "$PWD":/work -w /work \
-            arm64v8/ubuntu:22.04 \
+            openeuler/openeuler:22.03-lts \
             bash ci/bootstrap-aarch64.sh "${{ steps.decide.outputs.tag }}"
 
       - name: 上传构建产物
@@ -96,21 +100,20 @@ jobs:
           RELEASE_TAG="aarch64-$NAME"
           TARBALL="puxian-aarch64-$NAME.tar.gz"
           SHA="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
-          NOTES="$(cat <<EON
-          ## 解压即用包（aarch64 · openEuler 22.03 LTS 验证同流程）
-          
-          上游 ${{ steps.decide.outputs.tag }} 自举产物：13 个静态零依赖 ELF + 官方发布包布局。
-          self-prove 通过（编译器重编输出与 golden 逐字节一致）。
-          
-          - SHA-256: \`$SHA\`
-          - 使用: tar xzf → export PATH → px --version / px run / px build
-          - 说明: px 入口自动注入 aarch64 原生参数（C 轨 + aarch64 静态库 + 裁剪 QUIC）；首次 px build 现编 runtime 缓存（需 gcc）
-          EON
+          NOTES="$(printf '%s\n' \
+            '## 解压即用（aarch64 · openEuler 22.03 LTS 构建）' \
+            '' \
+            "上游 ${{ steps.decide.outputs.tag }} 自举产物（原生 arm64 runner 的 openEuler 22.03 容器构建）：13 个静态零依赖 ELF + 官方发布包布局。" \
+            'self-prove 通过（编译器重编输出与 golden 逐字节一致）。' \
+            '' \
+            "- SHA-256: \`$SHA\`" \
+            '- 使用: tar xzf → export PATH → px --version / px run / px build' \
+            '- 注意: px 入口已注入 aarch64 原生差异（C 轨 + aarch64 静态库 + 裁剪 QUIC）；首次 px build 需 gcc' \
           )"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "$TARBALL" --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$RELEASE_TAG" "$TARBALL" --repo "$GITHUB_REPOSITORY" \
-              --title "PuXian aarch64 原生工具链 $NAME（解压即用）" \
+              --title "PuXian aarch64 原生自举包 $NAME（解压即用）" \
               --notes "$NOTES"
           fi

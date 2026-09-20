@@ -9,7 +9,9 @@
 #
 # 用法: bash ci/bootstrap-aarch64.sh <upstream_tag> [workdir]
 # 示例: bash ci/bootstrap-aarch64.sh v0.2.0-m155 /work
-# 依赖: gcc / git / curl / tar / python3（容器内自动 apt 安装，宿主环境直接跑）
+# 依赖: gcc / git / curl / tar / python3 / file
+#   - 容器内自动安装（apt-get / dnf / yum 三系都支持）
+#   - 宿主环境直接跑（如 openEuler aarch64 原生已验证）
 # ============================================================
 set -euo pipefail
 UPSTREAM_TAG="${1:?用法: ci/bootstrap-aarch64.sh <upstream_tag> [workdir]}"
@@ -18,11 +20,15 @@ UPSTREAM_REPO=NanzhanGroup/PuXian
 RELEASE_NAME="${UPSTREAM_TAG#v}"          # v0.2.0-m155 → 0.2.0-m155
 cd "$WORK"
 
-# 0. 容器依赖（宿主已具备时自动跳过）
+# 0. 容器依赖（宿主已具备时自动跳过；Ubuntu→apt，openEuler/RHEL→dnf/yum）
 if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq gcc git curl tar ca-certificates file python3 >/dev/null
+elif command -v dnf >/dev/null 2>&1; then
+  dnf install -y -q gcc git curl tar ca-certificates file python3 >/dev/null
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y -q gcc git curl tar ca-certificates file python3 >/dev/null
 fi
 
 echo "== 1/5 解析上游 release: $UPSTREAM_REPO $UPSTREAM_TAG =="
